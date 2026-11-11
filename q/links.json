@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "updated": "2026-11-11T20:10:00.000Z",
+  "fallback": "https://lyndesing.github.io/brands/",
+  "links": {
+    "inicio": {
+      "url": "https://web-zl76r6njra-ue.a.run.app/cart?utm_source=qr&utm_medium=impreso&utm_campaign=inicio",
+      "active": true
+    }
+  }
+}
