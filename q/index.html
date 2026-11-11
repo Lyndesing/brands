@@ -70,20 +70,79 @@
     return;
   }
 
-  // El parámetro t salta la caché del CDN para que los cambios se vean apenas GitHub publica.
-  fetch(base + "/q/links.json?t=" + Date.now(), { cache: "no-store" })
-    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function (data) {
-      var links = (data && data.links) || {};
-      var link = links[code];
-      var fallback = safe(data && data.fallback) ? data.fallback : home;
-      if (link && link.active !== false && safe(link.url)) {
+  // Los destinos viven en la hoja de Google «Vibe · Marketing · Destinos QR» (compartida como "cualquiera con el enlace puede ver").
+  // Columnas: codigo, nombre, destino, activo, utm_source, utm_medium, utm_campaign, utm_content, notas
+  var SHEET_ID = "1XYmfx1c05KUTahIL5zU15nS9VZQ2c0vn3fyiR-LAE4M";
+  var t = Date.now();
+  var SOURCES = [
+    "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/gviz/tq?tqx=out:csv&headers=1&t=" + t,
+    "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/export?format=csv&t=" + t
+  ];
+
+  function parseCSV(text) {
+    var rows = [], row = [], cell = "", q = false;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text[i];
+      if (q) {
+        if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+        else cell += ch;
+      } else if (ch === '"') q = true;
+      else if (ch === ",") { row.push(cell); cell = ""; }
+      else if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && text[i + 1] === "\n") i++;
+        row.push(cell); rows.push(row); row = []; cell = "";
+      } else cell += ch;
+    }
+    if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
+    return rows;
+  }
+  function key(s) {
+    return String(s || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  }
+  function findRow(rows) {
+    var head = (rows[0] || []).map(key);
+    var col = function (names) { for (var i = 0; i < names.length; i++) { var j = head.indexOf(names[i]); if (j !== -1) return j; } return -1; };
+    var c = { code: col(["codigo", "code"]), dest: col(["destino", "url", "destination"]), active: col(["activo", "active", "estado"]),
+      src: col(["utm_source"]), med: col(["utm_medium"]), camp: col(["utm_campaign"]), cont: col(["utm_content"]) };
+    if (c.code === -1 || c.dest === -1) throw new Error("columnas");
+    for (var r = 1; r < rows.length; r++) {
+      var row = rows[r];
+      if (key(row[c.code]).replace(/_/g, "-") !== code && String(row[c.code] || "").trim().toLowerCase() !== code) continue;
+      var get = function (j) { return j === -1 ? "" : String(row[j] || "").trim(); };
+      var activeRaw = key(get(c.active));
+      var paused = ["no", "false", "0", "n", "pausado", "pausa", "inactivo", "off"].indexOf(activeRaw) !== -1;
+      var url = get(c.dest);
+      if (safe(url)) {
+        try {
+          var u = new URL(url);
+          [["utm_source", get(c.src)], ["utm_medium", get(c.med)], ["utm_campaign", get(c.camp)], ["utm_content", get(c.cont)]].forEach(function (p) {
+            if (p[1]) u.searchParams.set(p[0], p[1]);
+          });
+          url = u.toString();
+        } catch (e) { url = ""; }
+      } else url = "";
+      return { url: url, paused: paused };
+    }
+    return null;
+  }
+  function load(i) {
+    if (i >= SOURCES.length) return Promise.reject(new Error("sin datos"));
+    return fetch(SOURCES[i], { cache: "no-store", credentials: "omit" })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (txt) { if (/^\s*</.test(txt)) throw new Error("html"); return parseCSV(txt); })
+      .catch(function () { return load(i + 1); });
+  }
+
+  load(0)
+    .then(function (rows) {
+      var link = findRow(rows);
+      if (link && !link.paused && link.url) {
         location.replace(link.url);
         return;
       }
-      var reason = link ? "Esta campaña está pausada por ahora." : "No encontramos este código.";
+      var reason = !link ? "No encontramos este código." : (link.paused ? "Esta campaña está pausada por ahora." : "Este código no tiene un destino válido.");
       show("Código " + code.replace(/[<>&"]/g, ""), "Este enlace no está disponible",
-        reason + ' <a href="' + fallback.replace(/"/g, "&quot;") + '">Ir al sitio</a>');
+        reason + ' <a href="' + home + '">Ir al sitio</a>');
     })
     .catch(function () {
       show("Sin conexión", "No pudimos abrir el enlace", 'Revisa tu conexión y vuelve a escanear el código. <a href="' + home + '">Ir al inicio</a>');
